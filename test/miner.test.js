@@ -103,3 +103,12 @@ test('buildCurlArgs can use auto IP family for hosts with broken IPv4 TLS', () =
   const args = miner.buildCurlArgs('https://api.rpow2.com', 'GET', '/me', null, 'rpow_session=abc', 30, 'auto');
   assert.deepEqual(args, ['-sS', '--max-time', '30', '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', 'cookie: rpow_session=abc', '-X', 'GET', 'https://api.rpow2.com/me']);
 });
+
+test('buildCurlArgs supports proxy and curl-level retries', () => {
+  const args = miner.buildCurlArgs('https://api.rpow2.com', 'GET', '/me', null, 'rpow_session=abc', 30, 'auto', {
+    curl_proxy: 'socks5h://user:pass@proxy.example:1080',
+    curl_retries: 3,
+    curl_retry_delay_sec: 2,
+  });
+  assert.deepEqual(args, ['--proxy', 'socks5h://user:pass@proxy.example:1080', '--retry', '3', '--retry-delay', '2', '--retry-all-errors', '-sS', '--max-time', '30', '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', 'cookie: rpow_session=abc', '-X', 'GET', 'https://api.rpow2.com/me']);
+});

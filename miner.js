@@ -203,10 +203,15 @@ async function api(method, endpoint, body) {
   return data;
 }
 
-function buildCurlArgs(base, method, endpoint, body, cookie, timeoutSec, ipVersion = '4') {
+function buildCurlArgs(base, method, endpoint, body, cookie, timeoutSec, ipVersion = '4', c = {}) {
   const args = [];
   if (String(ipVersion) === '4') args.push('-4');
   else if (String(ipVersion) === '6') args.push('-6');
+  if (c.curl_proxy || c.https_proxy || c.proxy) args.push('--proxy', String(c.curl_proxy || c.https_proxy || c.proxy));
+  if (c.curl_proxy_insecure) args.push('--proxy-insecure');
+  if (Number(c.curl_retries || 0) > 0) {
+    args.push('--retry', String(Number(c.curl_retries || 0)), '--retry-delay', String(Number(c.curl_retry_delay_sec || 2)), '--retry-all-errors');
+  }
   args.push('-sS', '--max-time', String(timeoutSec), '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', `cookie: ${cookie}`);
   if (body) args.push('-H', 'content-type: application/json', '--data', JSON.stringify(body));
   if (method !== 'GET' || !body) args.push('-X', method);
@@ -214,9 +219,10 @@ function buildCurlArgs(base, method, endpoint, body, cookie, timeoutSec, ipVersi
   return args;
 }
 function apiCurl(base, method, endpoint, body) {
-  const args = buildCurlArgs(base, method, endpoint, body, buildCookieHeader(config), Math.ceil(Number(config.http_timeout_ms || 30000) / 1000), config.curl_ip_version || '4');
+  const args = buildCurlArgs(base, method, endpoint, body, buildCookieHeader(config), Math.ceil(Number(config.http_timeout_ms || 30000) / 1000), config.curl_ip_version || '4', config);
   return new Promise((resolve, reject) => {
-    execFile('curl', args, { timeout: Number(config.http_timeout_ms || 30000) + 5000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+    const totalTimeout = Number(config.http_timeout_ms || 30000) * (Number(config.curl_retries || 0) + 1) + 5000;
+    execFile('curl', args, { timeout: totalTimeout, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(`curl ${method} ${endpoint} failed: ${err.message}${stderr ? `; ${stderr.trim()}` : ''}`));
       const marker = '\nHTTP_STATUS:';
       const idx = stdout.lastIndexOf(marker);

@@ -72,6 +72,10 @@ Use this on NVIDIA GPU instances:
   "curl_ip_version": "auto",
   "use_undici_pool": false,
   "http_timeout_ms": 45000,
+  "curl_retries": 3,
+  "curl_retry_delay_sec": 2,
+  "curl_proxy": "",
+  "curl_proxy_insecure": false,
   "challenge_safety_ms": 5000,
   "balance_every": 50
 }
@@ -84,6 +88,8 @@ GPU tuning rules:
 - Keep `cuda_threads=256` unless occupancy is poor on your card.
 - `cuda_iterations` controls kernel batch length. Higher is faster but less responsive to challenge expiry. Recommended range: `256–2048`.
 - For official API, keep `http_client="curl"` because Node/undici was flaky against `api.rpow2.com` on some instances.
+- `curl_retries` retries transient `502`, timeout, and TLS/network errors inside curl before the miner loop retries.
+- Set `curl_proxy` only on VPS providers that cannot TLS-handshake with `api.rpow2.com`; prefer `socks5h://USER:PASS@HOST:PORT` so DNS goes through the proxy.
 - If API timeouts increase, do not add more lanes; GPU is probably already faster than the API path.
 
 Background:
