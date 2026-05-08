@@ -23,5 +23,5 @@
   "http_connections": 2,
   "log_challenges": false,
   "use_undici_pool": false,
-  "http_client": "fetch"
+  "http_client": "curl"
 }

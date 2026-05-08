@@ -52,5 +52,12 @@ test('isRetryableStartupError retries network timeouts but not unauthorized', ()
 test('shouldUsePool can disable undici pool for flaky VPS networking', () => {
   assert.equal(miner.shouldUsePool({ use_undici_pool: false }), false);
   assert.equal(miner.shouldUsePool({ http_client: 'fetch' }), false);
+  assert.equal(miner.shouldUsePool({ http_client: 'curl' }), false);
   assert.equal(miner.shouldUsePool({}), true);
+});
+
+test('buildCurlArgs creates safe curl API request', () => {
+  const args = miner.buildCurlArgs('https://api.rpow2.com', 'GET', '/me', null, 'rpow_session=abc', 20);
+  assert.deepEqual(args.slice(0, 7), ['-4', '-sS', '--max-time', '20', '-w', '\nHTTP_STATUS:%{http_code}\n', '-H']);
+  assert.ok(args.includes('https://api.rpow2.com/me'));
 });

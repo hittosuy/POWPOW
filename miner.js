@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const dns = require('dns');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 dns.setDefaultResultOrder?.('ipv4first');
 let Pool;
 try { ({ Pool } = require('undici')); } catch { Pool = null; }
@@ -143,9 +143,10 @@ function setupPool(api, lanes = 1) {
   const conns = Math.max(2, Number(config?.http_connections || Math.min(64, lanes * 2)));
   pool = new Pool(u.origin, { connections: conns, pipelining: 1 });
 }
-function shouldUsePool(c = {}) { return c.use_undici_pool !== false && String(c.http_client || 'pool') !== 'fetch'; }
+function shouldUsePool(c = {}) { return c.use_undici_pool !== false && !['fetch', 'curl'].includes(String(c.http_client || 'pool')); }
 async function api(method, endpoint, body) {
   const base = apiBase(config);
+  if (String(config.http_client || '').toLowerCase() === 'curl') return apiCurl(base, method, endpoint, body);
   const headers = { cookie: buildCookieHeader(config) };
   if (body) headers['content-type'] = 'application/json';
   let status, text;
@@ -160,6 +161,31 @@ async function api(method, endpoint, body) {
   let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (status < 200 || status >= 300) throw new Error(`${method} ${endpoint} HTTP ${status}: ${text}`);
   return data;
+}
+
+function buildCurlArgs(base, method, endpoint, body, cookie, timeoutSec) {
+  const args = ['-4', '-sS', '--max-time', String(timeoutSec), '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', `cookie: ${cookie}`];
+  if (body) args.push('-H', 'content-type: application/json', '--data', JSON.stringify(body));
+  if (method !== 'GET' || !body) args.push('-X', method);
+  args.push(base + endpoint);
+  return args;
+}
+function apiCurl(base, method, endpoint, body) {
+  const args = buildCurlArgs(base, method, endpoint, body, buildCookieHeader(config), Math.ceil(Number(config.http_timeout_ms || 30000) / 1000));
+  return new Promise((resolve, reject) => {
+    execFile('curl', args, { timeout: Number(config.http_timeout_ms || 30000) + 5000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) return reject(new Error(`curl ${method} ${endpoint} failed: ${err.message}${stderr ? `; ${stderr.trim()}` : ''}`));
+      const marker = '\nHTTP_STATUS:';
+      const idx = stdout.lastIndexOf(marker);
+      if (idx < 0) return reject(new Error(`curl ${method} ${endpoint} missing status`));
+      const text = stdout.slice(0, idx).trim();
+      const status = Number(stdout.slice(idx + marker.length).trim());
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+      if (status < 200 || status >= 300) return reject(new Error(`${method} ${endpoint} HTTP ${status}: ${text}`));
+      resolve(data);
+    });
+  });
 }
 
 function loadConfig(file) { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -204,4 +230,4 @@ function formatError(err) {
 function short(s) { const x = String(s || ''); return x.length <= 14 ? x : `${x.slice(0,6)}...${x.slice(-4)}`; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError, shouldUsePool };
+module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError, shouldUsePool, buildCurlArgs };
