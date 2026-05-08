@@ -82,6 +82,7 @@ test('formatError expands AggregateError details', () => {
 
 test('isRetryableStartupError retries network timeouts but not unauthorized', () => {
   assert.equal(miner.isRetryableStartupError(new Error('connect ETIMEDOUT 1.2.3.4:443')), true);
+  assert.equal(miner.isRetryableStartupError(new Error('curl GET /me failed: curl: (35) OpenSSL SSL_connect: SSL_ERROR_SYSCALL')), true);
   assert.equal(miner.isRetryableStartupError(new Error('AggregateError')), true);
   assert.equal(miner.isRetryableStartupError(new Error('GET /me HTTP 401: login required')), false);
 });
@@ -94,7 +95,11 @@ test('shouldUsePool can disable undici pool for flaky VPS networking', () => {
 });
 
 test('buildCurlArgs creates safe curl API request', () => {
-  const args = miner.buildCurlArgs('https://api.rpow2.com', 'GET', '/me', null, 'rpow_session=abc', 20);
-  assert.deepEqual(args.slice(0, 7), ['-4', '-sS', '--max-time', '20', '-w', '\nHTTP_STATUS:%{http_code}\n', '-H']);
-  assert.ok(args.includes('https://api.rpow2.com/me'));
+  const args = miner.buildCurlArgs('https://api.rpow2.com', 'POST', '/challenge', { a: 1 }, 'rpow_session=abc', 30, '4');
+  assert.deepEqual(args, ['-4', '-sS', '--max-time', '30', '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', 'cookie: rpow_session=abc', '-H', 'content-type: application/json', '--data', '{"a":1}', '-X', 'POST', 'https://api.rpow2.com/challenge']);
+});
+
+test('buildCurlArgs can use auto IP family for hosts with broken IPv4 TLS', () => {
+  const args = miner.buildCurlArgs('https://api.rpow2.com', 'GET', '/me', null, 'rpow_session=abc', 30, 'auto');
+  assert.deepEqual(args, ['-sS', '--max-time', '30', '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', 'cookie: rpow_session=abc', '-X', 'GET', 'https://api.rpow2.com/me']);
 });

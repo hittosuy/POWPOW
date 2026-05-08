@@ -69,6 +69,7 @@ Use this on NVIDIA GPU instances:
   "lanes": 1,
   "workers_per_lane": 1,
   "http_client": "curl",
+  "curl_ip_version": "auto",
   "use_undici_pool": false,
   "http_timeout_ms": 45000,
   "challenge_safety_ms": 5000,

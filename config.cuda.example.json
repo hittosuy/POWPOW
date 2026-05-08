@@ -15,6 +15,7 @@
   "challenge_safety_ms": 5000,
   "retry_delay_ms": 3000,
   "http_client": "curl",
+  "curl_ip_version": "auto",
   "use_undici_pool": false,
   "http_timeout_ms": 45000,
   "log_progress": false,

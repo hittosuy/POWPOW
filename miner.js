@@ -203,15 +203,18 @@ async function api(method, endpoint, body) {
   return data;
 }
 
-function buildCurlArgs(base, method, endpoint, body, cookie, timeoutSec) {
-  const args = ['-4', '-sS', '--max-time', String(timeoutSec), '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', `cookie: ${cookie}`];
+function buildCurlArgs(base, method, endpoint, body, cookie, timeoutSec, ipVersion = '4') {
+  const args = [];
+  if (String(ipVersion) === '4') args.push('-4');
+  else if (String(ipVersion) === '6') args.push('-6');
+  args.push('-sS', '--max-time', String(timeoutSec), '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', `cookie: ${cookie}`);
   if (body) args.push('-H', 'content-type: application/json', '--data', JSON.stringify(body));
   if (method !== 'GET' || !body) args.push('-X', method);
   args.push(base + endpoint);
   return args;
 }
 function apiCurl(base, method, endpoint, body) {
-  const args = buildCurlArgs(base, method, endpoint, body, buildCookieHeader(config), Math.ceil(Number(config.http_timeout_ms || 30000) / 1000));
+  const args = buildCurlArgs(base, method, endpoint, body, buildCookieHeader(config), Math.ceil(Number(config.http_timeout_ms || 30000) / 1000), config.curl_ip_version || '4');
   return new Promise((resolve, reject) => {
     execFile('curl', args, { timeout: Number(config.http_timeout_ms || 30000) + 5000, maxBuffer: 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(`curl ${method} ${endpoint} failed: ${err.message}${stderr ? `; ${stderr.trim()}` : ''}`));
@@ -258,7 +261,7 @@ function log(level, msg, data = {}) { const line = JSON.stringify({ t: new Date(
 function isRetryableStartupError(err) {
   const s = [err?.name, err?.message, err?.code, ...(Array.isArray(err?.errors) ? err.errors.map((e) => e?.message || String(e)) : [])].filter(Boolean).join(' ');
   if (/401|UNAUTHORIZED|login required/i.test(s)) return false;
-  return /AggregateError|ETIMEDOUT|ENETUNREACH|ECONNRESET|ECONNREFUSED|EAI_AGAIN|fetch failed|network|timeout/i.test(s);
+  return /AggregateError|ETIMEDOUT|ENETUNREACH|ECONNRESET|ECONNREFUSED|EAI_AGAIN|SSL_ERROR_SYSCALL|curl .*failed|fetch failed|network|timeout/i.test(s);
 }
 function formatError(err) {
   const out = { name: err?.name || 'Error', message: err?.message || String(err) };
