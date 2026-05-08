@@ -1,0 +1,7 @@
+node_modules/
+logs/
+logs-local/
+state.json
+*.pid
+*.log
+config.local.json

@@ -1,0 +1,20 @@
+{
+  "api": "https://api.rpow2.com",
+  "rpow_session": "ISI_RPOW_SESSION_OFFICIAL_DI_SINI",
+  "engine": "native",
+  "native_binary": "./rpow-native-miner",
+  "workers": "auto",
+  "max_workers": 6,
+  "cpu_reserve": 1,
+  "max_mints": 0,
+  "status_every": 1,
+  "balance_every": 5,
+  "challenge_safety_ms": 5000,
+  "retry_delay_ms": 3000,
+  "http_timeout_ms": 30000,
+  "log_progress": false,
+  "progress_interval_ms": 5000,
+  "log_to_file": true,
+  "log_dir": "./logs",
+  "log_retention_hours": 24
+}
