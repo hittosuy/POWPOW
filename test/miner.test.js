@@ -48,3 +48,9 @@ test('isRetryableStartupError retries network timeouts but not unauthorized', ()
   assert.equal(miner.isRetryableStartupError(new Error('AggregateError')), true);
   assert.equal(miner.isRetryableStartupError(new Error('GET /me HTTP 401: login required')), false);
 });
+
+test('shouldUsePool can disable undici pool for flaky VPS networking', () => {
+  assert.equal(miner.shouldUsePool({ use_undici_pool: false }), false);
+  assert.equal(miner.shouldUsePool({ http_client: 'fetch' }), false);
+  assert.equal(miner.shouldUsePool({}), true);
+});

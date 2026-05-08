@@ -138,11 +138,12 @@ async function solveNode(ch, opts) {
 }
 
 function setupPool(api, lanes = 1) {
-  if (!Pool) return;
+  if (!Pool || !shouldUsePool(config || {})) return;
   const u = new URL(apiBase({ api }));
   const conns = Math.max(2, Number(config?.http_connections || Math.min(64, lanes * 2)));
   pool = new Pool(u.origin, { connections: conns, pipelining: 1 });
 }
+function shouldUsePool(c = {}) { return c.use_undici_pool !== false && String(c.http_client || 'pool') !== 'fetch'; }
 async function api(method, endpoint, body) {
   const base = apiBase(config);
   const headers = { cookie: buildCookieHeader(config) };
@@ -203,4 +204,4 @@ function formatError(err) {
 function short(s) { const x = String(s || ''); return x.length <= 14 ? x : `${x.slice(0,6)}...${x.slice(-4)}`; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError };
+module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError, shouldUsePool };
