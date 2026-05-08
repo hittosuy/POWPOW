@@ -18,3 +18,19 @@ test('challenge cutoff applies safety margin', () => {
   const cutoff = miner.challengeCutoffMs('2030-01-01T00:00:10.000Z', 5000);
   assert.equal(cutoff, Date.parse('2030-01-01T00:00:05.000Z'));
 });
+
+test('buildMiningPlan supports explicit multi-lane layout', () => {
+  assert.deepEqual(miner.buildMiningPlan({ lanes: 16, workers_per_lane: 8, max_total_workers: 128 }, { cpus: 128 }), {
+    lanes: 16,
+    workersPerLane: 8,
+    totalWorkers: 128,
+  });
+});
+
+test('buildMiningPlan auto lanes splits total workers', () => {
+  assert.deepEqual(miner.buildMiningPlan({ lanes: 'auto', workers_per_lane: 8, max_total_workers: 128, cpu_reserve: 2 }, { cpus: 128 }), {
+    lanes: 15,
+    workersPerLane: 8,
+    totalWorkers: 120,
+  });
+});

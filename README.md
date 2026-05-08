@@ -58,3 +58,35 @@ CPU: Intel i5-12400F, 6 physical cores / 12 threads.
 - C specialized single-block: ~4.10 MH/s single thread, ~21.9 MH/s at 6 threads
 
 Best measured setting here: native C, 6 workers.
+
+## Multi-lane mode for large VPS
+
+For high-core VPS, do not use one huge single lane. Use multiple lanes so CPU stays busy while other lanes wait for `/mint` and `/challenge` HTTP responses.
+
+Example for 128 logical CPUs:
+
+```json
+{
+  "lanes": 16,
+  "workers_per_lane": 8,
+  "max_total_workers": 128,
+  "http_connections": 32,
+  "log_challenges": false,
+  "balance_every": 100
+}
+```
+
+Alternative profiles:
+
+- 32 CPU: `lanes=4`, `workers_per_lane=8`
+- 64 CPU: `lanes=8`, `workers_per_lane=8`
+- 128 CPU: `lanes=16`, `workers_per_lane=8`
+
+Restart after changing config:
+
+```bash
+pm2 restart rpowfinal
+# or if using nohup/manual, kill old node process then run again
+node miner.js config.json
+```
+

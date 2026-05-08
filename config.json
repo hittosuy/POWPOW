@@ -8,7 +8,7 @@
   "cpu_reserve": 1,
   "max_mints": 0,
   "status_every": 1,
-  "balance_every": 5,
+  "balance_every": 50,
   "challenge_safety_ms": 5000,
   "retry_delay_ms": 3000,
   "http_timeout_ms": 30000,
@@ -16,5 +16,10 @@
   "progress_interval_ms": 5000,
   "log_to_file": true,
   "log_dir": "./logs",
-  "log_retention_hours": 24
+  "log_retention_hours": 24,
+  "lanes": 1,
+  "workers_per_lane": 6,
+  "max_total_workers": 6,
+  "http_connections": 2,
+  "log_challenges": false
 }
