@@ -19,6 +19,43 @@ test('challenge cutoff applies safety margin', () => {
   assert.equal(cutoff, Date.parse('2030-01-01T00:00:05.000Z'));
 });
 
+test('selects cuda solver when engine is cuda', () => {
+  assert.equal(miner.normalizeEngine('CUDA'), 'cuda');
+});
+
+test('cuda solver command uses gpu binary and tuning flags', () => {
+  const ch = { nonce_prefix: '001122', difficulty_bits: 20 };
+  const cmd = miner.buildSolverCommand(ch, {
+    engine: 'cuda',
+    rootDir: '/repo',
+    laneId: 2,
+    workers: 6,
+    cutoff: 123456,
+    config: {
+      cuda_binary: './rpow-cuda-miner',
+      cuda_blocks: 512,
+      cuda_threads: 256,
+      cuda_iterations: 512,
+      cuda_device: 1,
+      log_progress: true,
+      progress_interval_ms: 1000,
+    },
+  });
+  assert.equal(cmd.label, 'cuda');
+  assert.equal(cmd.bin, '/repo/rpow-cuda-miner');
+  assert.deepEqual(cmd.args, [
+    '--prefix', '001122',
+    '--difficulty', '20',
+    '--start', String(2n << 48n),
+    '--cutoff-ms', '123456',
+    '--progress-ms', '1000',
+    '--blocks', '512',
+    '--threads', '256',
+    '--iterations', '512',
+    '--device', '1',
+  ]);
+});
+
 test('buildMiningPlan supports explicit multi-lane layout', () => {
   assert.deepEqual(miner.buildMiningPlan({ lanes: 16, workers_per_lane: 8, max_total_workers: 128 }, { cpus: 128 }), {
     lanes: 16,

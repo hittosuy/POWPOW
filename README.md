@@ -3,7 +3,8 @@
 Hybrid RPOW2 headless miner:
 
 - `miner.js` = Node.js orchestrator: config, session, HTTP keep-alive, retry, logging, expiry cutoff.
-- `rpow-native-miner.c` = native C PoW engine, specialized single-block SHA-256 for RPOW2 input (`nonce_prefix` 16 bytes + nonce 8 bytes).
+- `rpow-native-miner.c` = native C CPU PoW engine, specialized single-block SHA-256 for RPOW2 input (`nonce_prefix` 16 bytes + nonce 8 bytes).
+- `rpow-cuda-miner.cu` = CUDA GPU PoW engine for NVIDIA GPU instances.
 - No browser required for mining.
 
 ## Build
@@ -12,6 +13,19 @@ Hybrid RPOW2 headless miner:
 cd /home/sbram/RPOWFinal
 ./build.sh
 npm test
+```
+
+`./build.sh` always builds the CPU miner. If `nvcc` is available, it also builds `rpow-cuda-miner`.
+On GPU instances without auto-detected CUDA, install the CUDA toolkit and run:
+
+```bash
+./build-cuda.sh
+```
+
+Optional CUDA arch override (useful if your nvcc does not auto-target the GPU):
+
+```bash
+CUDA_ARCH=sm_89 ./build-cuda.sh
 ```
 
 ## Configure official mining
@@ -37,6 +51,39 @@ Local RPOW cookies are not valid on official API.
 cd /home/sbram/RPOWFinal
 node miner.js config.json
 ```
+
+## CUDA GPU mode
+
+Use this on NVIDIA GPU instances:
+
+```json
+{
+  "api": "https://api.rpow2.com",
+  "rpow_session": "COOKIE_OFFICIAL_RPOW_SESSION",
+  "engine": "cuda",
+  "cuda_binary": "./rpow-cuda-miner",
+  "cuda_blocks": 4096,
+  "cuda_threads": 256,
+  "cuda_iterations": 512,
+  "cuda_device": 0,
+  "lanes": 1,
+  "workers_per_lane": 1,
+  "http_client": "curl",
+  "use_undici_pool": false,
+  "http_timeout_ms": 45000,
+  "challenge_safety_ms": 5000,
+  "balance_every": 50
+}
+```
+
+GPU tuning rules:
+
+- Start with `lanes=1`; one CUDA lane can already saturate many GPUs.
+- Increase `cuda_blocks` first (`4096` → `8192`) if GPU utilization is low.
+- Keep `cuda_threads=256` unless occupancy is poor on your card.
+- `cuda_iterations` controls kernel batch length. Higher is faster but less responsive to challenge expiry. Recommended range: `256–2048`.
+- For official API, keep `http_client="curl"` because Node/undici was flaky against `api.rpow2.com` on some instances.
+- If API timeouts increase, do not add more lanes; GPU is probably already faster than the API path.
 
 Background:
 

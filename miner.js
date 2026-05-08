@@ -63,7 +63,7 @@ async function waitForLogin() {
 }
 
 async function runLane(laneId, plan, maxMints) {
-  const engine = String(config.engine || 'native');
+  const engine = normalizeEngine(config.engine || 'native');
   const retryDelay = Number(config.retry_delay_ms || 3000);
   const statusEvery = Number(config.status_every || 1);
   const balanceEvery = Number(config.balance_every || 50);
@@ -74,9 +74,9 @@ async function runLane(laneId, plan, maxMints) {
       if (cutoff <= Date.now()) { stats.expired++; log('warn', 'challenge too close to expiry', { lane: laneId, challenge_id: short(ch.challenge_id), expires_at: ch.expires_at }); continue; }
       if (config.log_challenges) log('info', 'challenge', { lane: laneId, id: short(ch.challenge_id), diff: ch.difficulty_bits, expires_at: ch.expires_at });
       const solveStart = Date.now();
-      const solution = engine === 'native'
-        ? await solveNative(ch, { laneId, workers: plan.workersPerLane, cutoff, rootDir, config })
-        : await solveNode(ch, { cutoff });
+      const solution = engine === 'node'
+        ? await solveNode(ch, { cutoff })
+        : await solveExternal(ch, { engine, laneId, workers: plan.workersPerLane, cutoff, rootDir, config });
       const solveMs = Date.now() - solveStart;
       if (solution.type === 'expired') { stats.expired++; log('warn', 'challenge expired while mining', { lane: laneId, hashes: solution.hashes }); continue; }
       const mint = await api('POST', '/mint', { challenge_id: ch.challenge_id, solution_nonce: String(solution.solution_nonce) });
@@ -99,13 +99,53 @@ async function runLane(laneId, plan, maxMints) {
   }
 }
 
-function solveNative(ch, opts) {
-  const bin = path.resolve(opts.rootDir, opts.config.native_binary || './rpow-native-miner');
+function normalizeEngine(v) {
+  const engine = String(v || 'native').toLowerCase();
+  if (engine === 'cpu') return 'native';
+  if (engine === 'gpu') return 'cuda';
+  return engine;
+}
+
+function buildSolverCommand(ch, opts) {
+  const engine = normalizeEngine(opts.engine || opts.config?.engine || 'native');
   const progressMs = Number(opts.config.progress_interval_ms || 5000);
-  const startNonce = BigInt(opts.laneId) << 48n;
-  const args = ['--prefix', ch.nonce_prefix, '--difficulty', String(ch.difficulty_bits), '--workers', String(opts.workers), '--start', startNonce.toString(), '--cutoff-ms', String(opts.cutoff), '--progress-ms', String(opts.config.log_progress ? progressMs : 0)];
+  const startNonce = BigInt(opts.laneId || 0) << 48n;
+  if (engine === 'native') {
+    return {
+      label: 'native',
+      bin: path.resolve(opts.rootDir, opts.config.native_binary || './rpow-native-miner'),
+      args: ['--prefix', ch.nonce_prefix, '--difficulty', String(ch.difficulty_bits), '--workers', String(opts.workers), '--start', startNonce.toString(), '--cutoff-ms', String(opts.cutoff), '--progress-ms', String(opts.config.log_progress ? progressMs : 0)],
+    };
+  }
+  if (engine === 'cuda') {
+      const args = [
+        '--prefix', ch.nonce_prefix,
+        '--difficulty', String(ch.difficulty_bits),
+        '--start', startNonce.toString(),
+        '--cutoff-ms', String(opts.cutoff),
+        '--progress-ms', String(opts.config.log_progress ? progressMs : 0),
+        '--blocks', String(opts.config.cuda_blocks || 4096),
+        '--threads', String(opts.config.cuda_threads || 256),
+        '--iterations', String(opts.config.cuda_iterations || 512),
+      ];
+      if (opts.config.cuda_device !== undefined) args.push('--device', String(opts.config.cuda_device));
+      return {
+        label: 'cuda',
+        bin: path.resolve(opts.rootDir, opts.config.cuda_binary || './rpow-cuda-miner'),
+        args,
+      };
+  }
+  throw new Error(`unknown mining engine: ${engine}`);
+}
+
+function solveNative(ch, opts) {
+  return solveExternal(ch, { ...opts, engine: 'native' });
+}
+
+function solveExternal(ch, opts) {
+  const cmd = buildSolverCommand(ch, opts);
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { cwd: opts.rootDir, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(cmd.bin, cmd.args, { cwd: opts.rootDir, stdio: ['ignore', 'pipe', 'pipe'] });
     let done = false, stderr = '', buf = '';
     const finish = (v) => { if (done) return; done = true; child.kill('SIGTERM'); resolve(v); };
     child.stdout.on('data', (chunk) => {
@@ -113,15 +153,15 @@ function solveNative(ch, opts) {
       let idx;
       while ((idx = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, idx).trim(); buf = buf.slice(idx + 1); if (!line) continue;
-        let msg; try { msg = JSON.parse(line); } catch { log('warn', 'native non-json', { lane: opts.laneId, line }); continue; }
-        if (msg.type === 'progress') { if (opts.config.log_progress) log('progress', 'mining', { lane: opts.laneId, hashes: msg.hashes, nonce: msg.nonce, rate_mhs: +(Number(msg.rate_hs || 0) / 1e6).toFixed(3) }); saveState(opts.rootDir, ch, msg, opts.laneId); }
+        let msg; try { msg = JSON.parse(line); } catch { log('warn', `${cmd.label} non-json`, { lane: opts.laneId, line }); continue; }
+        if (msg.type === 'progress') { if (opts.config.log_progress) log('progress', 'mining', { lane: opts.laneId, engine: cmd.label, hashes: msg.hashes, nonce: msg.nonce, rate_mhs: +(Number(msg.rate_hs || 0) / 1e6).toFixed(3) }); saveState(opts.rootDir, ch, msg, opts.laneId); }
         else if (msg.type === 'found') finish(msg);
         else if (msg.type === 'expired') finish(msg);
       }
     });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('error', reject);
-    child.on('exit', (code, signal) => { if (!done) reject(new Error(`native miner exit ${code ?? signal}: ${stderr.trim()}`)); });
+    child.on('exit', (code, signal) => { if (!done) reject(new Error(`${cmd.label} miner exit ${code ?? signal}: ${stderr.trim()}`)); });
   });
 }
 
@@ -230,4 +270,4 @@ function formatError(err) {
 function short(s) { const x = String(s || ''); return x.length <= 14 ? x : `${x.slice(0,6)}...${x.slice(-4)}`; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError, shouldUsePool, buildCurlArgs };
+module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError, shouldUsePool, buildCurlArgs, normalizeEngine, buildSolverCommand };
