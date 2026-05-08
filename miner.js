@@ -38,7 +38,7 @@ async function main() {
   const maxMints = Number(config.max_mints || 0);
 
   log('info', 'RPOWFinal started', { api: apiBase(config), engine: String(config.engine || 'native'), lanes: plan.lanes, workers_per_lane: plan.workersPerLane, total_workers: plan.totalWorkers, max_mints: maxMints || 'nonstop' });
-  const me = await api('GET', '/me');
+  const me = await waitForLogin();
   log('info', 'Login OK', { email: me.email, balance: me.balance, minted: me.minted });
 
   const lanes = [];
@@ -47,6 +47,19 @@ async function main() {
   try { const end = await api('GET', '/me'); log('info', 'stopped', { balance: end.balance, minted_total_user: end.minted, run: stats.minted, failed: stats.failed, expired: stats.expired }); }
   catch { log('info', 'stopped', { run: stats.minted, failed: stats.failed, expired: stats.expired }); }
   if (pool) await pool.close();
+}
+
+async function waitForLogin() {
+  const retryDelay = Number(config.retry_delay_ms || 3000);
+  for (;;) {
+    try {
+      return await api('GET', '/me');
+    } catch (err) {
+      if (!isRetryableStartupError(err)) throw err;
+      log('warn', 'startup /me failed; retrying', { ...formatError(err), retry_delay_ms: retryDelay });
+      await sleep(retryDelay);
+    }
+  }
 }
 
 async function runLane(laneId, plan, maxMints) {
@@ -175,6 +188,11 @@ function setupLogging(c, dir) { if (c.log_to_file === false) return; const logDi
 function cleanupOldLogs(c, dir) { if (c.log_to_file === false) return; const logDir = path.resolve(dir, c.log_dir || './logs'); if (!fs.existsSync(logDir)) return; const cutoff = Date.now() - Number(c.log_retention_hours || 24) * 3600_000; for (const name of fs.readdirSync(logDir)) { const p = path.join(logDir, name); try { const st = fs.statSync(p); if (st.isFile() && st.mtimeMs < cutoff) fs.rmSync(p, { force: true }); } catch {} } }
 function saveState(dir, ch, msg, laneId = 0) { try { fs.writeFileSync(path.join(dir, `state-lane-${laneId}.json`), JSON.stringify({ t: new Date().toISOString(), lane: laneId, challenge_id: ch.challenge_id, nonce_prefix: ch.nonce_prefix, difficulty_bits: ch.difficulty_bits, expires_at: ch.expires_at, nonce: msg.nonce, hashes: msg.hashes }, null, 2)); } catch {} }
 function log(level, msg, data = {}) { const line = JSON.stringify({ t: new Date().toISOString(), level, msg, ...data }); console.log(line); if (logStream) logStream.write(line + '\n'); }
+function isRetryableStartupError(err) {
+  const s = [err?.name, err?.message, err?.code, ...(Array.isArray(err?.errors) ? err.errors.map((e) => e?.message || String(e)) : [])].filter(Boolean).join(' ');
+  if (/401|UNAUTHORIZED|login required/i.test(s)) return false;
+  return /AggregateError|ETIMEDOUT|ENETUNREACH|ECONNRESET|ECONNREFUSED|EAI_AGAIN|fetch failed|network|timeout/i.test(s);
+}
 function formatError(err) {
   const out = { name: err?.name || 'Error', message: err?.message || String(err) };
   if (err?.code) out.code = err.code;
@@ -185,4 +203,4 @@ function formatError(err) {
 function short(s) { const x = String(s || ''); return x.length <= 14 ? x : `${x.slice(0,6)}...${x.slice(-4)}`; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError };
+module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError };

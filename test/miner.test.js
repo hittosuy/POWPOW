@@ -42,3 +42,9 @@ test('formatError expands AggregateError details', () => {
   assert.equal(out.message, 'fetch failed');
   assert.deepEqual(out.errors, ['connect ENETUNREACH 2606::1', 'connect ETIMEDOUT 1.2.3.4']);
 });
+
+test('isRetryableStartupError retries network timeouts but not unauthorized', () => {
+  assert.equal(miner.isRetryableStartupError(new Error('connect ETIMEDOUT 1.2.3.4:443')), true);
+  assert.equal(miner.isRetryableStartupError(new Error('AggregateError')), true);
+  assert.equal(miner.isRetryableStartupError(new Error('GET /me HTTP 401: login required')), false);
+});
