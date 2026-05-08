@@ -34,3 +34,11 @@ test('buildMiningPlan auto lanes splits total workers', () => {
     totalWorkers: 120,
   });
 });
+
+test('formatError expands AggregateError details', () => {
+  const err = new AggregateError([new Error('connect ENETUNREACH 2606::1'), new Error('connect ETIMEDOUT 1.2.3.4')], 'fetch failed');
+  const out = miner.formatError(err);
+  assert.equal(out.name, 'AggregateError');
+  assert.equal(out.message, 'fetch failed');
+  assert.deepEqual(out.errors, ['connect ENETUNREACH 2606::1', 'connect ETIMEDOUT 1.2.3.4']);
+});

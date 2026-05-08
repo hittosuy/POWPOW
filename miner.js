@@ -5,7 +5,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns');
 const { spawn } = require('child_process');
+dns.setDefaultResultOrder?.('ipv4first');
 let Pool;
 try { ({ Pool } = require('undici')); } catch { Pool = null; }
 
@@ -20,7 +22,7 @@ const stats = { minted: 0, failed: 0, expired: 0, totalHashes: 0n, startedAt: Da
 process.on('SIGINT', () => { running = false; log('warn', 'stop requested'); });
 process.on('SIGTERM', () => { running = false; });
 
-if (require.main === module) main().catch((err) => { log('error', 'fatal', { error: err.message || String(err) }); process.exit(1); });
+if (require.main === module) main().catch((err) => { log('error', 'fatal', formatError(err)); process.exit(1); });
 
 async function main() {
   configPath = path.resolve(process.cwd(), configPath);
@@ -77,7 +79,7 @@ async function runLane(laneId, plan, maxMints) {
       }
     } catch (err) {
       stats.failed++;
-      log('error', 'loop error', { lane: laneId, failed: stats.failed, error: err.message || String(err) });
+      log('error', 'loop error', { lane: laneId, failed: stats.failed, ...formatError(err) });
       if (/401|UNAUTHORIZED/i.test(String(err.message))) { running = false; throw new Error('Session expired/invalid; update rpow_session'); }
       if (running) await sleep(retryDelay);
     }
@@ -173,7 +175,14 @@ function setupLogging(c, dir) { if (c.log_to_file === false) return; const logDi
 function cleanupOldLogs(c, dir) { if (c.log_to_file === false) return; const logDir = path.resolve(dir, c.log_dir || './logs'); if (!fs.existsSync(logDir)) return; const cutoff = Date.now() - Number(c.log_retention_hours || 24) * 3600_000; for (const name of fs.readdirSync(logDir)) { const p = path.join(logDir, name); try { const st = fs.statSync(p); if (st.isFile() && st.mtimeMs < cutoff) fs.rmSync(p, { force: true }); } catch {} } }
 function saveState(dir, ch, msg, laneId = 0) { try { fs.writeFileSync(path.join(dir, `state-lane-${laneId}.json`), JSON.stringify({ t: new Date().toISOString(), lane: laneId, challenge_id: ch.challenge_id, nonce_prefix: ch.nonce_prefix, difficulty_bits: ch.difficulty_bits, expires_at: ch.expires_at, nonce: msg.nonce, hashes: msg.hashes }, null, 2)); } catch {} }
 function log(level, msg, data = {}) { const line = JSON.stringify({ t: new Date().toISOString(), level, msg, ...data }); console.log(line); if (logStream) logStream.write(line + '\n'); }
+function formatError(err) {
+  const out = { name: err?.name || 'Error', message: err?.message || String(err) };
+  if (err?.code) out.code = err.code;
+  if (err?.cause) out.cause = err.cause?.message || String(err.cause);
+  if (Array.isArray(err?.errors)) out.errors = err.errors.map((e) => e?.message || String(e));
+  return out;
+}
 function short(s) { const x = String(s || ''); return x.length <= 14 ? x : `${x.slice(0,6)}...${x.slice(-4)}`; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE };
+module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError };
