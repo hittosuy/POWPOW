@@ -2,7 +2,7 @@
 
 Hybrid RPOW2 headless miner:
 
-- `miner.js` = Node.js orchestrator: config, session, HTTP keep-alive, retry, logging, expiry cutoff.
+- `miner.js` = Node.js orchestrator: config, session, HTTP keep-alive, retry, logging, expiry cutoff, ledger/reward/cap tracking.
 - `rpow-native-miner.c` = native C CPU PoW engine, specialized single-block SHA-256 for RPOW2 input (`nonce_prefix` 16 bytes + nonce 8 bytes).
 - `rpow-cuda-miner.cu` = CUDA GPU PoW engine for NVIDIA GPU instances.
 - No browser required for mining.
@@ -10,7 +10,7 @@ Hybrid RPOW2 headless miner:
 ## Build
 
 ```bash
-cd /home/sbram/RPOWFinal
+cd /home/sbram/RPOWFinal-clean
 ./build.sh
 npm test
 ```
@@ -45,10 +45,20 @@ Edit `config.json`:
 `rpow_session` must be the official cookie from `https://rpow2.com` / `https://api.rpow2.com`.
 Local RPOW cookies are not valid on official API.
 
+## New mint model
+
+The official API now controls issuance from `/ledger`:
+
+- Miner still solves `SHA256(nonce_prefix || uint64_le(solution_nonce))` against `difficulty_bits` from `/challenge`.
+- Reward is no longer assumed fixed by the miner; `/ledger.current_reward_base_units` is logged after mint.
+- Halving/cap state is tracked through `/ledger` fields like `halving_index`, `base_units_to_next_halving`, and `is_capped`.
+- If `/ledger.is_capped` or a cap-related `/mint` error appears, all lanes stop cleanly.
+- `ledger_every`, `ledger_interval_ms`, and `ledger_min_interval_ms` control how often supply/reward state is refreshed.
+
 ## Run
 
 ```bash
-cd /home/sbram/RPOWFinal
+cd /home/sbram/RPOWFinal-clean
 node miner.js config.json
 ```
 

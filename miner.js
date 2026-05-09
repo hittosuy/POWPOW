@@ -17,7 +17,7 @@ let pool = null;
 let configPath = process.argv[2] || './config.json';
 let config = null;
 let rootDir = __dirname;
-const stats = { minted: 0, failed: 0, expired: 0, totalHashes: 0n, startedAt: Date.now(), lastBalanceAt: 0 };
+const stats = { minted: 0, failed: 0, expired: 0, totalHashes: 0n, startedAt: Date.now(), lastBalanceAt: 0, lastLedgerAt: 0, lastLedger: null };
 
 process.on('SIGINT', () => { running = false; log('warn', 'stop requested'); });
 process.on('SIGTERM', () => { running = false; });
@@ -40,6 +40,12 @@ async function main() {
   log('info', 'RPOWFinal started', { api: apiBase(config), engine: String(config.engine || 'native'), lanes: plan.lanes, workers_per_lane: plan.workersPerLane, total_workers: plan.totalWorkers, max_mints: maxMints || 'nonstop' });
   const me = await waitForLogin();
   log('info', 'Login OK', { email: me.email, balance: me.balance, minted: me.minted });
+  await refreshLedger('startup', { force: true });
+  if (stats.lastLedger?.is_capped) {
+    log('warn', 'ledger reports capped supply; nothing to mine', ledgerLogFields(stats.lastLedger));
+    if (pool) await pool.close();
+    return;
+  }
 
   const lanes = [];
   for (let laneId = 0; laneId < plan.lanes; laneId++) lanes.push(runLane(laneId, plan, maxMints));
@@ -67,8 +73,13 @@ async function runLane(laneId, plan, maxMints) {
   const retryDelay = Number(config.retry_delay_ms || 3000);
   const statusEvery = Number(config.status_every || 1);
   const balanceEvery = Number(config.balance_every || 50);
+  const ledgerEvery = Number(config.ledger_every || 25);
   while (running && (maxMints === 0 || stats.minted < maxMints)) {
     try {
+      if (shouldRefreshLedgerBeforeChallenge(ledgerEvery)) {
+        const ledger = await refreshLedger('pre-challenge', { force: !stats.lastLedger });
+        if (ledger?.is_capped) { running = false; break; }
+      }
       const ch = await api('POST', '/challenge');
       const cutoff = challengeCutoffMs(ch.expires_at, Number(config.challenge_safety_ms || 5000));
       if (cutoff <= Date.now()) { stats.expired++; log('warn', 'challenge too close to expiry', { lane: laneId, challenge_id: short(ch.challenge_id), expires_at: ch.expires_at }); continue; }
@@ -84,15 +95,18 @@ async function runLane(laneId, plan, maxMints) {
       stats.totalHashes += BigInt(solution.hashes || 0);
       const rate = Number(solution.hashes || 0) / Math.max(0.001, solveMs / 1000);
       const avg = Number(stats.totalHashes) / Math.max(0.001, (Date.now() - stats.startedAt) / 1000);
-      if (stats.minted % statusEvery === 0) log('mint', 'Mint OK', { lane: laneId, run: stats.minted, token: short(mint?.token?.id), diff: ch.difficulty_bits, nonce: String(solution.solution_nonce), hashes: String(solution.hashes), solve_ms: solveMs, rate_mhs: +(rate / 1e6).toFixed(3), avg_mhs: +(avg / 1e6).toFixed(3) });
+      const ledger = await refreshLedger('post-mint');
+      if (stats.minted % statusEvery === 0) log('mint', 'Mint OK', mintLogFields({ laneId, ch, solution, mint, ledger, solveMs, rate, avg }));
+      if (ledger?.is_capped) { running = false; break; }
       if (balanceEvery > 0 && stats.minted % balanceEvery === 0 && Date.now() - stats.lastBalanceAt > 1000) {
         stats.lastBalanceAt = Date.now();
         const nowMe = await api('GET', '/me');
-        log('info', 'balance', { email: nowMe.email, balance: nowMe.balance, minted: nowMe.minted, run: stats.minted });
+        log('info', 'balance', { email: nowMe.email, balance: nowMe.balance, minted: nowMe.minted, balance_rpow: formatBaseUnits(nowMe.balance_base_units), minted_rpow: formatBaseUnits(nowMe.minted_base_units), run: stats.minted });
       }
     } catch (err) {
       stats.failed++;
       log('error', 'loop error', { lane: laneId, failed: stats.failed, ...formatError(err) });
+      if (isCapReachedError(err)) { await refreshLedger('cap-error', { force: true }); running = false; break; }
       if (/401|UNAUTHORIZED/i.test(String(err.message))) { running = false; throw new Error('Session expired/invalid; update rpow_session'); }
       if (running) await sleep(retryDelay);
     }
@@ -175,6 +189,90 @@ async function solveNode(ch, opts) {
     nonce++;
   }
   return { type: 'expired', hashes: hashes.toString() };
+}
+
+function shouldRefreshLedgerBeforeChallenge(ledgerEvery) {
+  const intervalMs = Number(config.ledger_interval_ms || 60_000);
+  if (!stats.lastLedger) return true;
+  if (ledgerEvery > 0 && stats.minted > 0 && stats.minted % ledgerEvery === 0) return true;
+  return Date.now() - stats.lastLedgerAt >= intervalMs;
+}
+
+async function refreshLedger(reason = 'manual', opts = {}) {
+  const minInterval = Number(config.ledger_min_interval_ms || 1000);
+  if (!opts.force && stats.lastLedger && Date.now() - stats.lastLedgerAt < minInterval) return stats.lastLedger;
+  try {
+    const ledger = await api('GET', '/ledger');
+    const previous = stats.lastLedger;
+    stats.lastLedger = ledger;
+    stats.lastLedgerAt = Date.now();
+    if (shouldLogLedger(previous, ledger, reason, opts.force)) log('info', 'ledger', { reason, ...ledgerLogFields(ledger) });
+    if (ledger?.is_capped) log('warn', 'supply cap reached', ledgerLogFields(ledger));
+    return ledger;
+  } catch (err) {
+    log('warn', 'ledger refresh failed', { reason, ...formatError(err) });
+    return stats.lastLedger;
+  }
+}
+
+function shouldLogLedger(prev, next, reason, force = false) {
+  if (!next) return false;
+  if (force || !prev || reason === 'cap-error') return true;
+  return prev.current_difficulty_bits !== next.current_difficulty_bits
+    || String(prev.current_reward_base_units) !== String(next.current_reward_base_units)
+    || String(prev.next_halving_at_base_units) !== String(next.next_halving_at_base_units)
+    || Boolean(prev.is_capped) !== Boolean(next.is_capped);
+}
+
+function ledgerLogFields(ledger = {}) {
+  return {
+    total_minted_rpow: formatBaseUnits(ledger.total_minted_base_units),
+    circulating_rpow: formatBaseUnits(ledger.circulating_supply_base_units),
+    reward_rpow: formatBaseUnits(ledger.current_reward_base_units),
+    next_reward_rpow: ledger.is_capped ? 'CAPPED' : formatBaseUnits(ledger.next_reward_base_units),
+    to_next_halving_rpow: formatBaseUnits(ledger.base_units_to_next_halving),
+    next_halving_at_rpow: formatBaseUnits(ledger.next_halving_at_base_units),
+    halving_index: ledger.halving_index,
+    current_difficulty_bits: ledger.current_difficulty_bits,
+    is_capped: Boolean(ledger.is_capped),
+  };
+}
+
+function mintLogFields({ laneId, ch, solution, mint, ledger, solveMs, rate, avg }) {
+  return {
+    lane: laneId,
+    run: stats.minted,
+    token: short(mint?.token?.id),
+    diff: ch.difficulty_bits,
+    nonce: String(solution.solution_nonce),
+    hashes: String(solution.hashes),
+    solve_ms: solveMs,
+    rate_mhs: +(rate / 1e6).toFixed(3),
+    avg_mhs: +(avg / 1e6).toFixed(3),
+    reward_rpow: formatBaseUnits(ledger?.current_reward_base_units),
+    total_minted_rpow: formatBaseUnits(ledger?.total_minted_base_units),
+    to_next_halving_rpow: formatBaseUnits(ledger?.base_units_to_next_halving),
+    halving_index: ledger?.halving_index,
+    is_capped: Boolean(ledger?.is_capped),
+  };
+}
+
+function formatBaseUnits(v) {
+  if (v === undefined || v === null || v === '') return undefined;
+  try {
+    const n = typeof v === 'bigint' ? v : BigInt(v);
+    const unit = 1_000_000_000n;
+    const whole = n / unit;
+    const frac = n % unit;
+    if (frac === 0n) return whole.toString();
+    return `${whole}.${frac.toString().padStart(9, '0').replace(/0+$/, '')}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function isCapReachedError(err) {
+  return /CAPPED|CAP_REACHED|SUPPLY|hard cap|capped/i.test(String(err?.message || err));
 }
 
 function setupPool(api, lanes = 1) {
@@ -279,4 +377,4 @@ function formatError(err) {
 function short(s) { const x = String(s || ''); return x.length <= 14 ? x : `${x.slice(0,6)}...${x.slice(-4)}`; }
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError, shouldUsePool, buildCurlArgs, normalizeEngine, buildSolverCommand };
+module.exports = { buildCookieHeader, normalizeWorkers, buildMiningPlan, challengeCutoffMs, trailingZeroBits, writeU64LE, formatError, isRetryableStartupError, shouldUsePool, buildCurlArgs, normalizeEngine, buildSolverCommand, formatBaseUnits, ledgerLogFields, shouldLogLedger, isCapReachedError };

@@ -112,3 +112,48 @@ test('buildCurlArgs supports proxy and curl-level retries', () => {
   });
   assert.deepEqual(args, ['--proxy', 'socks5h://user:pass@proxy.example:1080', '--retry', '3', '--retry-delay', '2', '--retry-all-errors', '-sS', '--max-time', '30', '-w', '\nHTTP_STATUS:%{http_code}\n', '-H', 'cookie: rpow_session=abc', '-X', 'GET', 'https://api.rpow2.com/me']);
 });
+
+test('formatBaseUnits converts 9 decimal RPOW base units', () => {
+  assert.equal(miner.formatBaseUnits('1000000000'), '1');
+  assert.equal(miner.formatBaseUnits('7812500'), '0.0078125');
+  assert.equal(miner.formatBaseUnits(undefined), undefined);
+});
+
+test('ledgerLogFields exposes halving-aware supply state', () => {
+  const out = miner.ledgerLogFields({
+    total_minted_base_units: '11000000000000000',
+    circulating_supply_base_units: '9900000000000000',
+    current_reward_base_units: '7812500',
+    next_reward_base_units: '3906250',
+    base_units_to_next_halving: '250000000000000',
+    next_halving_at_base_units: '12000000000000000',
+    halving_index: 0,
+    current_difficulty_bits: 24,
+    is_capped: false,
+  });
+  assert.deepEqual(out, {
+    total_minted_rpow: '11000000',
+    circulating_rpow: '9900000',
+    reward_rpow: '0.0078125',
+    next_reward_rpow: '0.00390625',
+    to_next_halving_rpow: '250000',
+    next_halving_at_rpow: '12000000',
+    halving_index: 0,
+    current_difficulty_bits: 24,
+    is_capped: false,
+  });
+});
+
+test('shouldLogLedger detects reward and cap changes', () => {
+  const a = { current_difficulty_bits: 24, current_reward_base_units: '7812500', next_halving_at_base_units: '120', is_capped: false };
+  const b = { current_difficulty_bits: 24, current_reward_base_units: '3906250', next_halving_at_base_units: '130', is_capped: false };
+  assert.equal(miner.shouldLogLedger(null, a), true);
+  assert.equal(miner.shouldLogLedger(a, { ...a }), false);
+  assert.equal(miner.shouldLogLedger(a, b), true);
+  assert.equal(miner.shouldLogLedger(a, { ...a, is_capped: true }), true);
+});
+
+test('isCapReachedError detects supply cap responses', () => {
+  assert.equal(miner.isCapReachedError(new Error('CAP_REACHED: hard cap reached')), true);
+  assert.equal(miner.isCapReachedError(new Error('challenge expired')), false);
+});
